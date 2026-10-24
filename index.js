@@ -207,6 +207,9 @@ export async function switchModel(model) {
             throw new Error('模型未成功应用，请检查原 API 面板。');
         }
         return model;
+    }).then(model => {
+        if (!connectCurrentApi()) throw new Error('模型已切换，但未能发起 API 连接，请检查原 API 面板。');
+        return model;
     });
 }
 
@@ -289,7 +292,7 @@ export function init() {
           <select id="ttis-model" data-model class="text_pole"></select>
           <button type="button" data-apply-model class="menu_button">仅切换模型</button>
           <p data-model-empty class="ttis-note"></p>
-          <p class="ttis-note">模型列表来自原 API 面板；切换模型不会重新应用连接配置或预设。</p>
+          <p class="ttis-note">模型列表来自原 API 面板；切换成功后自动连接当前 API，不重新应用连接配置或预设。</p>
           <label for="ttis-preset">已有预设</label>
           <select id="ttis-preset" data-preset class="text_pole"></select>
           <button type="button" data-apply-preset class="menu_button">仅切换预设</button>
@@ -331,7 +334,7 @@ export function init() {
         try {
             const value = root.querySelector(`[data-${kind}]`).value;
             const label = await (kind === 'api' ? switchApi(value, root.querySelector('[data-secret]').value) : kind === 'preset' ? switchPreset(value) : switchModel(value));
-            status.textContent = kind === 'api' ? `已应用 ${label}，预设已保留；连接结果请查看原 API 面板。` : kind === 'preset' ? `已应用预设 ${label}，连接已保留。` : `已切换到模型 ${label}，API 和预设已保留。`;
+            status.textContent = kind === 'api' ? `已应用 ${label}，预设已保留；连接结果请查看原 API 面板。` : kind === 'preset' ? `已应用预设 ${label}，连接已保留。` : `已切换到模型 ${label}，API 和预设已保留，已发起连接；连接结果请查看原 API 面板。`;
         } catch (error) {
             status.textContent = error.message || '切换失败，请检查原 API 面板。';
         } finally {

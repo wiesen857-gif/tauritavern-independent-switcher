@@ -197,6 +197,7 @@ test('reads current API models and switches only the model', async () => {
     assert.deepEqual(f.extensionSettings, saved);
     assert.deepEqual(f.state.calls.map(call => call.name), ['model']);
     assert.ok(f.state.calls[0].suspended);
+    assert.equal(f.state.connects, 1);
 });
 
 test('model list refreshes and rejects a model not offered by the current API', async () => {
@@ -208,6 +209,7 @@ test('model list refreshes and rejects a model not offered by the current API', 
     await assert.rejects(f.switchModel('new-model'), /不在当前 API 的列表中/);
     assert.equal(f.state.model, 'old-model');
     assert.equal(f.state.calls.length, 0);
+    assert.equal(f.state.connects, 1, 'Only the preceding refresh should connect');
 });
 
 test('model button updates the displayed current model', async () => {
@@ -221,7 +223,32 @@ test('model button updates the displayed current model', async () => {
     await new Promise(resolve => setImmediate(resolve));
     assert.match(f.document.querySelector('[data-current-model]').textContent, /new-model/);
     assert.match(f.document.querySelector('[data-status]').textContent, /API 和预设已保留/);
+    assert.match(f.document.querySelector('[data-status]').textContent, /已发起连接/);
+    assert.equal(f.state.connects, 1);
     assert.equal(f.document.querySelector('[data-apply-model]').disabled, true);
+});
+
+test('failed model application never connects', async () => {
+    const f = await fixture();
+    f.commands.model.callback = () => 'old-model';
+    await assert.rejects(f.switchModel('new-model'), /模型未成功应用/);
+    assert.equal(f.state.connects, 0);
+});
+
+test('model connection launch failure is shown beside the button without undoing the model', async () => {
+    const f = await fixture({ noConnect: true });
+    f.init();
+    const select = f.document.querySelector('[data-model]');
+    select.value = 'new-model';
+    select.dispatchEvent(new f.window.Event('change'));
+    const button = f.document.querySelector('[data-apply-model]');
+    button.click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.state.model, 'new-model');
+    assert.equal(f.state.connects, 1);
+    assert.equal(button.nextElementSibling, f.document.querySelector('[data-status]'));
+    assert.match(button.nextElementSibling.textContent, /模型已切换，但未能发起 API 连接/);
+    assert.equal(f.document.querySelector('fieldset').disabled, false);
 });
 
 test('model controls follow API controls and refresh rereads API, model and preset lists', async () => {
