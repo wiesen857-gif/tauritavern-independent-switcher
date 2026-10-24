@@ -32,6 +32,10 @@ async function fixture(options = {}) {
         proxy: 'Proxy B', preset: 'Bundled preset', 'regex-preset': 'unwanted-regex', 'start-reply-with': 'unwanted-prefill',
     };
     const extensionSettings = { connectionManager: { profiles: [profile], modelTargets: [] } };
+    const secrets = {
+        'custom-key': [{ id: 'old-id', label: '16Z', active: true, value: 'never-render-this-value' }, { id: 'new-id', label: '奇异果', value: 'never-render-that-value' }],
+        'claude-key': [{ id: 'claude-id', label: 'Claude key' }],
+    };
     const events = {};
     const eventSource = {
         on: (event, fn) => { (events[event] ??= []).push(fn); },
@@ -108,9 +112,9 @@ async function fixture(options = {}) {
         '/scripts/openai.js': { oai_settings: settings, ...(!options.missingMapping && { settingsToUpdate: mapping }),
             ...(!options.missingPresetPromise && { getPresetApplicationPromise: () => pendingPreset }) },
         '/scripts/preset-manager.js': { getPresetManager: () => manager },
-        '/scripts/slash-commands.js': { CONNECT_API_MAP: { custom: { selected: 'openai' }, kobold: { selected: 'kobold' } }, connectCurrentApi: () => { assert.equal(state.suspended, false); state.connects++; } },
+        '/scripts/slash-commands.js': { CONNECT_API_MAP: { custom: { selected: 'openai', source: 'custom' }, claude: { selected: 'openai', source: 'claude' }, kobold: { selected: 'kobold' } }, connectCurrentApi: () => { assert.equal(state.suspended, false); state.connects++; return !options.noConnect; } },
         '/scripts/slash-commands/SlashCommandParser.js': { SlashCommandParser: { commands } },
-        '/scripts/secrets.js': { resolveSecretKey: () => 'custom-key', secret_state: { 'custom-key': [{ id: 'old-id' }, { id: 'new-id' }] }, SECRET_KEYS: { VERTEXAI_SERVICE_ACCOUNT: 'vertex-service' } },
+        '/scripts/secrets.js': { resolveSecretKey: () => state.api === 'claude' ? 'claude-key' : 'custom-key', secret_state: secrets, SECRET_KEYS: { CUSTOM: 'custom-key', CLAUDE: 'claude-key', VERTEXAI_SERVICE_ACCOUNT: 'vertex-service' } },
     };
     const module = new vm.SourceTextModule(source, { context });
     await module.link(specifier => {
@@ -121,7 +125,7 @@ async function fixture(options = {}) {
         }, { context });
     });
     await module.evaluate();
-    return { ...module.namespace, window, document, state, settings, mapping, profile, extensionSettings, manager, commands, modelChoices, eventSource, $, setPending: promise => { pendingPreset = promise; } };
+    return { ...module.namespace, window, document, state, settings, mapping, profile, extensionSettings, manager, commands, modelChoices, secrets, eventSource, $, setPending: promise => { pendingPreset = promise; } };
 }
 
 test('API switch preserves preset, unsaved prompts, sampling and saved profiles; reconnects only after all fields', async () => {
@@ -231,6 +235,17 @@ test('model controls follow API controls and refresh rereads API, model and pres
     assert.ok(f.document.querySelector('[data-api] option[value="profile:p2"]'));
     assert.ok(f.document.querySelector('[data-model] option[value="third-model"]'));
     assert.ok(f.document.querySelector('[data-preset] option[value="Third preset"]'));
+    assert.equal(f.state.connects, 1);
+    assert.match(f.document.querySelector('[data-status]').textContent, /正在请求当前连接的模型列表/);
+});
+
+test('connection refresh failure is shown next to the refresh button', async () => {
+    const f = await fixture({ noConnect: true });
+    f.init();
+    const button = f.document.querySelector('[data-refresh]');
+    button.click();
+    assert.equal(button.nextElementSibling, f.document.querySelector('[data-status]'));
+    assert.match(button.nextElementSibling.textContent, /没有可用的连接按钮/);
 });
 
 test('model options loaded after API switch appear automatically', async () => {
@@ -270,6 +285,60 @@ test('deleted references and cross-family profiles fail before any connection ch
         await assert.rejects(f.switchApi('profile:p1'));
         assert.equal(f.state.calls.length, 0);
     }
+});
+
+test('a chosen saved secret replaces a deleted profile reference and switches the endpoint', async () => {
+    const f = await fixture();
+    f.profile['secret-id'] = 'deleted-id';
+    const saved = structuredClone(f.extensionSettings);
+    f.init();
+    const api = f.document.querySelector('[data-api]');
+    api.value = 'profile:p1';
+    api.dispatchEvent(new f.window.Event('change'));
+    assert.match(f.document.querySelector('[data-secret-note]').textContent, /已失效/);
+    const secrets = f.document.querySelector('[data-secret]');
+    assert.match(secrets.textContent, /奇异果/);
+    assert.doesNotMatch(f.document.getElementById('tt-independent-switcher').outerHTML, /never-render/);
+    secrets.value = JSON.stringify(['custom-key', 'new-id']);
+    secrets.dispatchEvent(new f.window.Event('change'));
+    f.document.querySelector('[data-apply-api]').click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(f.state.url, 'https://new.example/v1');
+    assert.equal(f.state.secret, 'new-id');
+    assert.equal(f.state.model, 'new-model');
+    assert.equal(f.state.selectedPreset, 'Original');
+    assert.equal(f.state.connects, 1);
+    assert.deepEqual(f.extensionSettings, saved);
+    assert.match(f.document.querySelector('[data-status]').textContent, /已应用 API B/);
+    assert.deepEqual([...f.document.querySelectorAll('#ttis-api, #ttis-secret, #ttis-model')].map(control => control.id), ['ttis-api', 'ttis-secret', 'ttis-model']);
+});
+
+test('secret choices follow the target API and do not carry across profiles', async () => {
+    const f = await fixture();
+    f.extensionSettings.connectionManager.profiles.push({ id: 'p2', name: 'Claude', api: 'claude', 'secret-id': 'claude-id' });
+    f.init();
+    const api = f.document.querySelector('[data-api]');
+    api.value = 'profile:p1';
+    api.dispatchEvent(new f.window.Event('change'));
+    f.document.querySelector('[data-secret]').value = JSON.stringify(['custom-key', 'new-id']);
+    api.value = 'profile:p2';
+    api.dispatchEvent(new f.window.Event('change'));
+    const select = f.document.querySelector('[data-secret]');
+    assert.equal(select.value, '');
+    assert.match(select.textContent, /Claude key/);
+    assert.doesNotMatch(select.textContent, /奇异果/);
+    await assert.rejects(f.switchApi('profile:p2', JSON.stringify(['custom-key', 'new-id'])), /不适用于此 API/);
+    assert.equal(f.state.calls.length, 0);
+});
+
+test('deleted chosen secrets fail before mutation; explicit selection overrides excluded saved secret', async () => {
+    const f = await fixture();
+    await assert.rejects(f.switchApi('profile:p1', JSON.stringify(['custom-key', 'deleted-id'])), /所选密钥已不存在/);
+    assert.equal(f.state.calls.length, 0);
+    f.profile.exclude = ['secret-id'];
+    await f.switchApi('profile:p1', JSON.stringify(['custom-key', 'new-id']));
+    assert.equal(f.state.secret, 'new-id');
+    assert.equal(f.profile.exclude[0], 'secret-id');
 });
 
 test('command failure stops subsequent fields and never reconnects a partial configuration', async () => {
@@ -324,6 +393,7 @@ test('empty list, refresh, selection and failed UI action leave controls usable'
     f.document.querySelector('[data-apply-api]').click();
     await new Promise(resolve => setImmediate(resolve));
     assert.match(f.document.querySelector('[data-status]').textContent, /未能准确应用/);
+    assert.equal(f.document.querySelector('[data-apply-api]').nextElementSibling, f.document.querySelector('[data-status]'));
     assert.equal(f.document.querySelector('fieldset').disabled, false);
 });
 

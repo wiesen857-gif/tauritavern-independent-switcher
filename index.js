@@ -22,6 +22,21 @@ export function getConnections() {
     ];
 }
 
+function getSecretOptions(entry) {
+    const api = CONNECT_API_MAP[entry?.item.api];
+    if (!api) return [];
+    const type = api.source || api.type || (api.selected === 'koboldhorde' ? 'horde' : api.selected);
+    const keys = type === 'vertexai'
+        ? [SECRET_KEYS.VERTEXAI, SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT]
+        : [SECRET_KEYS[type.toUpperCase()]];
+    return keys.filter(Boolean).flatMap(secretKey =>
+        (Array.isArray(secret_state[secretKey]) ? secret_state[secretKey] : []).map((secret, index) => ({
+            key: JSON.stringify([secretKey, secret.id]), id: secret.id, secretKey,
+            label: `${secret.label || `未命名密钥 ${index + 1}`}${secret.active ? '（当前启用）' : ''}${secretKey === SECRET_KEYS.VERTEXAI_SERVICE_ACCOUNT ? ' · 服务账号' : ''}`,
+        })),
+    );
+}
+
 function getCurrentModel() {
     return String(SlashCommandParser.commands.model?.callback({ quiet: 'true' }, '') ?? '');
 }
@@ -61,7 +76,7 @@ async function runSwitch(action) {
     }
 }
 
-export async function switchApi(key) {
+export async function switchApi(key, secretChoice = '') {
     return runSwitch(async () => {
         const entry = getConnections().find(entry => entry.key === key);
         if (!entry) throw new Error('连接配置已被删除，请刷新列表。');
@@ -77,11 +92,14 @@ export async function switchApi(key) {
         for (const name of ['api', 'custom-api-format', 'api-url', 'proxy', 'model', 'secret-id']) {
             if (!excluded.includes(name) && item[name]) fields[name] = String(item[name]);
         }
-        const secret = modelOnly ? item.secretRef : null;
+        const availableSecrets = getSecretOptions(entry);
+        const chosenSecret = secretChoice ? availableSecrets.find(secret => secret.key === secretChoice) : null;
+        if (secretChoice && !chosenSecret) throw new Error('所选密钥已不存在或不适用于此 API，请刷新后重新选择。');
+        const secret = chosenSecret ? { id: chosenSecret.id, key: chosenSecret.secretKey } : modelOnly ? item.secretRef : null;
         const secretId = secret?.id || fields['secret-id'];
         // Validate exact references before changing an endpoint; never select a fuzzy credential match.
-        if (secretId && !Object.values(secret_state).some(list => Array.isArray(list) && list.some(s => s.id === secretId))) {
-            throw new Error('此配置引用的密钥已不存在，请在原连接管理器中重新选择并保存。');
+        if (secretId && !availableSecrets.some(s => s.id === secretId && (!secret?.key || s.secretKey === secret.key))) {
+            throw new Error('此配置引用的密钥已不存在或不匹配，请在下方密钥框选择有效密钥后再切换。');
         }
         const proxy = fields.proxy || (modelOnly && targetFamily === 'openai' ? 'None' : '');
         if (proxy && !Array.from(document.querySelector('#openai_proxy_preset')?.options ?? []).some(o => o.value === proxy)) {
@@ -202,6 +220,26 @@ function fillSelect(select, entries, preferred) {
     if (entries.some(entry => entry.key === preferred && !entry.disabled)) select.value = preferred;
 }
 
+function refreshSecrets(root) {
+    const apiKey = root.querySelector('[data-api]').value;
+    const entry = getConnections().find(entry => entry.key === apiKey);
+    const select = root.querySelector('[data-secret]');
+    const preferred = select.dataset.api === apiKey ? select.value : '';
+    const secrets = getSecretOptions(entry);
+    fillSelect(select, secrets, preferred);
+    select.dataset.api = apiKey;
+    select.options[0].textContent = entry ? '使用原配置的密钥设置' : '请先选择 API 配置';
+    select.disabled = !entry;
+    const savedId = entry?.modelOnly ? entry.item.secretRef?.id : entry?.item.exclude?.includes('secret-id') ? null : entry?.item['secret-id'];
+    const saved = secrets.find(secret => secret.id === savedId);
+    root.querySelector('[data-secret-note]').textContent = !entry ? '选择 API 后显示该类型已保存的密钥。'
+        : select.value ? '将使用所选密钥替代原配置的密钥设置；不会改写已保存的配置。'
+        : savedId && !saved ? '原配置引用的密钥已失效，请选择一个有效密钥，再点击“应用 API 与密钥”。'
+        : !secrets.length ? '此 API 类型没有已保存的密钥，请先在原 API 面板添加。'
+        : saved ? `原配置密钥：${saved.label}。可在此临时改选，不改写原配置。`
+        : '原配置未指定密钥；可在此选择，否则沿用当前密钥设置。';
+}
+
 function refresh() {
     const root = document.getElementById(ROOT_ID);
     if (!root || busy) return;
@@ -212,6 +250,7 @@ function refresh() {
         return { ...entry, disabled: incompatible, label: entry.label + (incompatible ? '（补全类型不同）' : '') };
     });
     fillSelect(apiSelect, entries, apiSelect.value);
+    refreshSecrets(root);
     fillSelect(root.querySelector('[data-preset]'), (presets?.getAllPresets() ?? []).map(name => ({ key: name, label: name })), presets?.getSelectedPresetName());
     const currentModel = getCurrentModel();
     const models = getModels();
@@ -240,7 +279,11 @@ export function init() {
         <fieldset>
           <label for="ttis-api">已有 API 配置</label>
           <select id="ttis-api" data-api class="text_pole"></select>
-          <button type="button" data-apply-api class="menu_button">仅切换 API</button>
+          <label for="ttis-secret">此 API 使用的密钥</label>
+          <select id="ttis-secret" data-secret class="text_pole"></select>
+          <p data-secret-note class="ttis-note"></p>
+          <button type="button" data-apply-api class="menu_button">应用 API 与密钥</button>
+          <p data-status role="status" aria-live="polite"></p>
           <p class="ttis-note">应用 API、地址、模型、反代和密钥引用，保留当前预设及未保存的提示词设置。</p>
           <label for="ttis-model">当前 API 的模型</label>
           <select id="ttis-model" data-model class="text_pole"></select>
@@ -254,14 +297,25 @@ export function init() {
           <button type="button" data-refresh class="menu_button">刷新 API、模型和预设</button>
         </fieldset>
         <p data-empty class="ttis-note"></p>
-        <p data-status role="status" aria-live="polite"></p>
         <p class="ttis-note">独立切换仅在此面板生效；原连接管理器仍按原规则加载整套配置。</p>
       </details>`;
     container.append(root);
-    root.querySelector('[data-refresh]').addEventListener('click', refresh);
+    root.querySelector('[data-refresh]').addEventListener('click', () => {
+        const status = root.querySelector('[data-status]');
+        root.querySelector('[data-refresh]').after(status);
+        try {
+            refresh();
+            if (!connectCurrentApi()) throw new Error('当前 API 没有可用的连接按钮，请检查原 API 面板。');
+            status.textContent = '已重读 API 和预设，正在请求当前连接的模型列表；返回后会自动更新。';
+        } catch (error) {
+            status.textContent = error.message || '刷新失败，请检查原 API 面板。';
+        }
+    });
     root.querySelector('[data-api]').addEventListener('change', () => {
+        refreshSecrets(root);
         root.querySelector('[data-apply-api]').disabled = !root.querySelector('[data-api]').value;
     });
+    root.querySelector('[data-secret]').addEventListener('change', () => refreshSecrets(root));
     root.querySelector('[data-preset]').addEventListener('change', () => {
         root.querySelector('[data-apply-preset]').disabled = !root.querySelector('[data-preset]').value;
     });
@@ -270,12 +324,13 @@ export function init() {
     });
     const apply = async (kind) => {
         const status = root.querySelector('[data-status]');
+        root.querySelector(`[data-apply-${kind}]`).after(status);
         const fieldset = root.querySelector('fieldset');
         fieldset.disabled = true;
         status.textContent = '正在应用…';
         try {
             const value = root.querySelector(`[data-${kind}]`).value;
-            const label = await (kind === 'api' ? switchApi(value) : kind === 'preset' ? switchPreset(value) : switchModel(value));
+            const label = await (kind === 'api' ? switchApi(value, root.querySelector('[data-secret]').value) : kind === 'preset' ? switchPreset(value) : switchModel(value));
             status.textContent = kind === 'api' ? `已应用 ${label}，预设已保留；连接结果请查看原 API 面板。` : kind === 'preset' ? `已应用预设 ${label}，连接已保留。` : `已切换到模型 ${label}，API 和预设已保留。`;
         } catch (error) {
             status.textContent = error.message || '切换失败，请检查原 API 面板。';
@@ -288,7 +343,7 @@ export function init() {
     root.querySelector('[data-apply-preset]').addEventListener('click', () => apply('preset'));
     root.querySelector('[data-apply-model]').addEventListener('click', () => apply('model'));
     root.querySelector('details').addEventListener('toggle', refresh);
-    for (const event of ['CONNECTION_PROFILE_CREATED', 'CONNECTION_PROFILE_UPDATED', 'CONNECTION_PROFILE_DELETED', 'MODEL_TARGET_CREATED', 'MODEL_TARGET_UPDATED', 'MODEL_TARGET_DELETED', 'PRESET_CHANGED', 'MAIN_API_CHANGED', 'CHATCOMPLETION_MODEL_CHANGED', 'ONLINE_STATUS_CHANGED']) {
+    for (const event of ['CONNECTION_PROFILE_CREATED', 'CONNECTION_PROFILE_UPDATED', 'CONNECTION_PROFILE_DELETED', 'MODEL_TARGET_CREATED', 'MODEL_TARGET_UPDATED', 'MODEL_TARGET_DELETED', 'PRESET_CHANGED', 'MAIN_API_CHANGED', 'CHATCOMPLETION_MODEL_CHANGED', 'ONLINE_STATUS_CHANGED', 'SECRET_WRITTEN', 'SECRET_DELETED', 'SECRET_ROTATED', 'SECRET_EDITED']) {
         if (event_types[event]) eventSource.on(event_types[event], refresh);
     }
     const modelObserver = new MutationObserver(refresh);
