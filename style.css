@@ -1,0 +1,15 @@
+#tt-independent-switcher {
+    --ttis-gap: 10px;
+    margin-block: var(--ttis-gap);
+    font-size: 16px;
+    overflow-wrap: anywhere;
+}
+#tt-independent-switcher summary { cursor: pointer; padding-block: 12px; }
+#tt-independent-switcher fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+#tt-independent-switcher label { display: block; margin-block: 16px 6px; font-weight: 600; }
+#tt-independent-switcher select { display: block; width: 100%; min-width: 0; min-height: 44px; font-size: 16px; }
+#tt-independent-switcher button { display: block; width: 100%; min-height: 44px; margin-block: var(--ttis-gap); font-size: 16px; }
+#tt-independent-switcher .ttis-note { font-size: 0.875em; line-height: 1.6; margin-block: 6px 12px; }
+#tt-independent-switcher .ttis-current { border-left: 3px solid currentColor; padding-left: var(--ttis-gap); }
+#tt-independent-switcher [data-status] { line-height: 1.6; }
+#tt-independent-switcher :is(button, select, summary):focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }

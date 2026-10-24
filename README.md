@@ -1,0 +1,45 @@
+# API / 预设独立切换
+
+为 TauriTavern **2.4.0** 制作的前端扩展，操作入口位于「扩展设置 → API / 预设独立切换」。读取酒馆中已经保存的连接配置和预设，不需要重新填写密钥。
+
+## 在 TauriTavern 中安装（安卓适用）
+
+1. 打开 TauriTavern 的「扩展」管理界面，点击「安装扩展」。
+2. 在 Git 地址栏粘贴：`https://github.com/wiesen857-gif/tauritavern-independent-switcher.git`。
+3. 分支或标签留空，选择「安装」或「仅为我安装」。
+4. 安装完成后回到扩展设置，找到「API / 预设独立切换」。如果没有显示，重启 TauriTavern 并检查扩展管理中是否已启用。
+
+扩展更新可在原扩展管理界面完成。若此前安装过离线 ZIP 版，请先在扩展管理中删除旧的同名扩展，再按上述步骤从 GitHub 安装，避免目录冲突。删除扩展不会删除酒馆原有的 API 配置、预设或聊天记录。
+
+仓库根目录有 `manifest.json`，供 TauriTavern 直接按 Git 地址安装；无需下载 ZIP，也无需访问安卓受限的应用数据目录。
+
+## 使用
+
+- **仅切换 API**：从原连接管理器的已保存连接配置或模型配置中读取 API 类型、协议、地址、模型、反代预设及密钥引用。跳过捆绑的生成预设、正则预设、指令模板、预填充等字段。聊天补全的采样参数和未保存的提示词设置保持不变。
+- **仅切换预设**：读取当前补全类型的预设，使用酒馆原加载流程应用提示词和采样参数，同时跳过聊天补全预设中的连接字段。当前 API、地址、模型和密钥引用保留。预设附带的正则、脚本等仍由酒馆及相关扩展按原规则处理。
+- **刷新配置列表**：新建、删除或导入配置后可手动刷新；原连接管理器的创建、更新、删除事件也会刷新列表。
+
+下拉框选好后点击对应按钮才会应用。API 按钮完成后会发起原生连接检查，实际是否连通请看原 API 面板；“已应用”不等于远程服务已连通。
+
+## 行为边界
+
+- 独立切换仅在本扩展面板生效；原连接管理器仍会按原规则应用整套配置。
+- 本扩展不重写已保存的连接配置或预设，不另存一套配置库。切换后的当前设置由酒馆原生保存机制保存。
+- 聊天补全与文本补全使用不同的预设结构。跨补全类型的配置会置灰，需先在原 API 面板切换类型；同一补全类型内可以独立切换。
+- 普通连接配置没有保存或主动排除的字段，保持原生“未提供则保留”的含义；模型配置则遵循原生语义，清除未保存的地址与反代。
+- 这里只应用连接配置实际保存的连接字段；不会从捆绑预设中另外提取自定义请求头或额外请求体。若某个接口依赖这些参数，请先在原 API 面板设置正确。
+- 生成中禁止切换。中途应用失败会停止后续字段与自动重连，并显示错误；已应用的部分连接字段可能保留，请检查原 API 面板后重新选择有效配置。
+- 其他扩展若在预设事件中自行切换连接或执行脚本，仍可能改变连接；本扩展不接管其他扩展的行为。
+
+## 适配依据与验证
+
+目标版本：`Darkatse/TauriTavern` 标签 `v2.4.0`，提交 `fff9af0333be97697be2313981699ab0ce35c236`。
+
+- [原连接管理器](https://github.com/Darkatse/TauriTavern/blob/fff9af0333be97697be2313981699ab0ce35c236/src/scripts/extensions/connection-manager/index.js)：`extension_settings.connectionManager.profiles/modelTargets`、连接字段顺序、命令回调、模型配置语义。
+- [聊天补全预设加载器](https://github.com/Darkatse/TauriTavern/blob/fff9af0333be97697be2313981699ab0ce35c236/src/scripts/openai.js)：`bind_preset_to_connection`、`settingsToUpdate`、`getPresetApplicationPromise()`。独立切换时暂时关闭绑定，等待原生加载结束后恢复原值。
+- [预设管理器](https://github.com/Darkatse/TauriTavern/blob/fff9af0333be97697be2313981699ab0ce35c236/src/scripts/preset-manager.js)：`getPresetManager()`、`getAllPresets()`、`findPreset()`、`selectPreset()`。
+- [数据包导入](https://github.com/Darkatse/TauriTavern/tree/fff9af0333be97697be2313981699ab0ce35c236/src-tauri/crates/tt-adapter-archive/src/data_archive/import)：扩展目录识别、规范化和按文件合并规则。
+
+已运行 JavaScript 语法检查、模拟宿主及 DOM 行为测试，并在测试环境运行上述版本的原始预设加载函数。覆盖成功、失效引用、失败后恢复、重复操作、名称注入和空列表。尚未连接用户的安卓设备，未完成安卓 WebView 实机或真实 API 联网验收。
+
+开发验证：Node.js 24，运行 `npm ci` 后执行 `npm run check`。原生加载器集成测试需要同级目录 `../TauriTavern-v2.4.0-reference` 为上述提交的源码。测试依赖仅用于开发，安装包无需 npm 或任何额外运行依赖。

@@ -1,0 +1,12 @@
+{
+  "name": "tauritavern-independent-switcher",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check index.js && node --experimental-vm-modules --test tests/switcher.test.mjs"
+  },
+  "devDependencies": {
+    "happy-dom": "^21.0.4"
+  }
+}
