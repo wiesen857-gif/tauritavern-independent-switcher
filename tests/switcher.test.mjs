@@ -9,7 +9,7 @@ const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
 async function fixture(options = {}) {
     const window = new Window();
     const document = window.document;
-    document.body.innerHTML = '<div id="extensions_settings"></div><select id="openai_proxy_preset"><option>None</option><option>Proxy B</option></select><select id="settings_preset_openai"><option value="0">Original</option><option value="1">New preset</option></select><input id="temp_openai">';
+    document.body.innerHTML = '<div id="extensions_settings"></div><select id="openai_proxy_preset"><option>None</option><option>Proxy B</option></select><select id="settings_preset_openai"><option value="0">Original</option><option value="1">New preset</option></select><select id="model_openai_select"><option value="old-model">old-model</option></select><input id="temp_openai">';
     const state = {
         generating: false, connects: 0, saves: 0, suspended: false, calls: [],
         api: 'custom', url: 'https://old.example/v1', model: 'old-model', secret: 'old-id', proxy: 'None',
@@ -99,9 +99,9 @@ async function fixture(options = {}) {
         option.value = value;
         return option;
     }
-    const context = vm.createContext({ document, Option, structuredClone, $, console, setTimeout, clearTimeout });
+    const context = vm.createContext({ document, Option, MutationObserver: window.MutationObserver, structuredClone, $, console, setTimeout, clearTimeout });
     const modules = {
-        '/script.js': { eventSource, event_types: { PRESET_CHANGED: 'preset' }, main_api: options.mainApi ?? 'openai',
+        '/script.js': { eventSource, event_types: { PRESET_CHANGED: 'preset', ONLINE_STATUS_CHANGED: 'online' }, main_api: options.mainApi ?? 'openai',
             isGenerating: () => state.generating, saveSettingsDebounced: () => state.saves++,
             withConnectionValidationSuspended: async (_, fn) => { state.suspended = true; try { return await fn(); } finally { state.suspended = false; } } },
         '/scripts/extensions.js': { extension_settings: extensionSettings },
@@ -218,6 +218,39 @@ test('model button updates the displayed current model', async () => {
     assert.match(f.document.querySelector('[data-current-model]').textContent, /new-model/);
     assert.match(f.document.querySelector('[data-status]').textContent, /API 和预设已保留/);
     assert.equal(f.document.querySelector('[data-apply-model]').disabled, true);
+});
+
+test('model controls follow API controls and refresh rereads API, model and preset lists', async () => {
+    const f = await fixture();
+    f.init();
+    assert.deepEqual([...f.document.querySelectorAll('#ttis-api, #ttis-model, #ttis-preset')].map(control => control.id), ['ttis-api', 'ttis-model', 'ttis-preset']);
+    f.extensionSettings.connectionManager.profiles.push({ ...f.profile, id: 'p2', name: 'API C' });
+    f.modelChoices.push('third-model');
+    f.manager.getAllPresets = () => ['Original', 'New preset', 'Third preset'];
+    f.document.querySelector('[data-refresh]').click();
+    assert.ok(f.document.querySelector('[data-api] option[value="profile:p2"]'));
+    assert.ok(f.document.querySelector('[data-model] option[value="third-model"]'));
+    assert.ok(f.document.querySelector('[data-preset] option[value="Third preset"]'));
+});
+
+test('model options loaded after API switch appear automatically', async () => {
+    const f = await fixture();
+    f.init();
+    const select = f.document.querySelector('[data-api]');
+    select.value = 'profile:p1';
+    select.dispatchEvent(new f.window.Event('change'));
+    f.document.querySelector('[data-apply-api]').click();
+    await new Promise(resolve => setImmediate(resolve));
+    f.modelChoices.push('late-model');
+    const option = f.document.createElement('option');
+    option.value = 'late-model';
+    option.textContent = 'late-model';
+    f.document.querySelector('#model_openai_select').append(option);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.ok(f.document.querySelector('[data-model] option[value="late-model"]'));
+    f.modelChoices.push('status-model');
+    await f.eventSource.emit('online');
+    assert.ok(f.document.querySelector('[data-model] option[value="status-model"]'));
 });
 
 test('failed preset load restores binding and releases busy state', async () => {

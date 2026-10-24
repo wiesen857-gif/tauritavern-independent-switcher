@@ -242,16 +242,16 @@ export function init() {
           <select id="ttis-api" data-api class="text_pole"></select>
           <button type="button" data-apply-api class="menu_button">仅切换 API</button>
           <p class="ttis-note">应用 API、地址、模型、反代和密钥引用，保留当前预设及未保存的提示词设置。</p>
-          <label for="ttis-preset">已有预设</label>
-          <select id="ttis-preset" data-preset class="text_pole"></select>
-          <button type="button" data-apply-preset class="menu_button">仅切换预设</button>
-          <p class="ttis-note">应用提示词和采样参数，保留当前连接。预设绑定的正则、脚本等仍按酒馆原行为加载。</p>
           <label for="ttis-model">当前 API 的模型</label>
           <select id="ttis-model" data-model class="text_pole"></select>
           <button type="button" data-apply-model class="menu_button">仅切换模型</button>
           <p data-model-empty class="ttis-note"></p>
           <p class="ttis-note">模型列表来自原 API 面板；切换模型不会重新应用连接配置或预设。</p>
-          <button type="button" data-refresh class="menu_button">刷新配置列表</button>
+          <label for="ttis-preset">已有预设</label>
+          <select id="ttis-preset" data-preset class="text_pole"></select>
+          <button type="button" data-apply-preset class="menu_button">仅切换预设</button>
+          <p class="ttis-note">应用提示词和采样参数，保留当前连接。预设绑定的正则、脚本等仍按酒馆原行为加载。</p>
+          <button type="button" data-refresh class="menu_button">刷新 API、模型和预设</button>
         </fieldset>
         <p data-empty class="ttis-note"></p>
         <p data-status role="status" aria-live="polite"></p>
@@ -288,8 +288,12 @@ export function init() {
     root.querySelector('[data-apply-preset]').addEventListener('click', () => apply('preset'));
     root.querySelector('[data-apply-model]').addEventListener('click', () => apply('model'));
     root.querySelector('details').addEventListener('toggle', refresh);
-    for (const event of ['CONNECTION_PROFILE_CREATED', 'CONNECTION_PROFILE_UPDATED', 'CONNECTION_PROFILE_DELETED', 'MODEL_TARGET_CREATED', 'MODEL_TARGET_UPDATED', 'MODEL_TARGET_DELETED', 'PRESET_CHANGED', 'MAIN_API_CHANGED', 'CHATCOMPLETION_MODEL_CHANGED']) {
+    for (const event of ['CONNECTION_PROFILE_CREATED', 'CONNECTION_PROFILE_UPDATED', 'CONNECTION_PROFILE_DELETED', 'MODEL_TARGET_CREATED', 'MODEL_TARGET_UPDATED', 'MODEL_TARGET_DELETED', 'PRESET_CHANGED', 'MAIN_API_CHANGED', 'CHATCOMPLETION_MODEL_CHANGED', 'ONLINE_STATUS_CHANGED']) {
         if (event_types[event]) eventSource.on(event_types[event], refresh);
+    }
+    const modelObserver = new MutationObserver(refresh);
+    for (const control of document.querySelectorAll('select[id*="model"], datalist[id*="model"]')) {
+        if (!root.contains(control)) modelObserver.observe(control, { childList: true, subtree: true, attributes: true, characterData: true });
     }
     refresh();
 }
