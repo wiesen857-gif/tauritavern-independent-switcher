@@ -61,6 +61,16 @@ async function fixture(options = {}) {
         if (name === 'secret-id') state.secret = value;
         return value;
     } }]));
+    const modelChoices = ['old-model', 'new-model'];
+    commands.model = {
+        callback: (args, value) => {
+            if (!value) return state.model;
+            state.calls.push({ name: 'model', value, args, suspended: state.suspended });
+            state.model = value;
+            return value;
+        },
+        unnamedArgumentList: [{ enumProvider: () => modelChoices.map(value => ({ value, description: null })) }],
+    };
     let pendingPreset = Promise.resolve();
     const manager = {
         getAllPresets: () => ['Original', 'New preset'],
@@ -111,7 +121,7 @@ async function fixture(options = {}) {
         }, { context });
     });
     await module.evaluate();
-    return { ...module.namespace, window, document, state, settings, mapping, profile, extensionSettings, manager, commands, eventSource, $, setPending: promise => { pendingPreset = promise; } };
+    return { ...module.namespace, window, document, state, settings, mapping, profile, extensionSettings, manager, commands, modelChoices, eventSource, $, setPending: promise => { pendingPreset = promise; } };
 }
 
 test('API switch preserves preset, unsaved prompts, sampling and saved profiles; reconnects only after all fields', async () => {
@@ -168,6 +178,48 @@ test('preset switch preserves connection and restores both original binding stat
     }
 });
 
+test('reads current API models and switches only the model', async () => {
+    const f = await fixture({ missingPresetPromise: true });
+    const saved = structuredClone(f.extensionSettings);
+    f.init();
+    assert.match(f.document.querySelector('[data-current-model]').textContent, /old-model/);
+    assert.deepEqual([...f.document.querySelectorAll('[data-model] option')].map(option => option.value), ['', 'old-model', 'new-model']);
+    await f.switchModel('new-model');
+    assert.equal(f.state.model, 'new-model');
+    assert.equal(f.state.selectedPreset, 'Original');
+    assert.equal(f.state.api, 'custom');
+    assert.equal(f.state.url, 'https://old.example/v1');
+    assert.equal(f.state.secret, 'old-id');
+    assert.deepEqual(f.extensionSettings, saved);
+    assert.deepEqual(f.state.calls.map(call => call.name), ['model']);
+    assert.ok(f.state.calls[0].suspended);
+});
+
+test('model list refreshes and rejects a model not offered by the current API', async () => {
+    const f = await fixture();
+    f.init();
+    f.modelChoices.splice(1, 1, 'fresh-model');
+    f.document.querySelector('[data-refresh]').click();
+    assert.ok(f.document.querySelector('[data-model] option[value="fresh-model"]'));
+    await assert.rejects(f.switchModel('new-model'), /不在当前 API 的列表中/);
+    assert.equal(f.state.model, 'old-model');
+    assert.equal(f.state.calls.length, 0);
+});
+
+test('model button updates the displayed current model', async () => {
+    const f = await fixture();
+    f.init();
+    const select = f.document.querySelector('[data-model]');
+    select.value = 'new-model';
+    select.dispatchEvent(new f.window.Event('change'));
+    assert.equal(f.document.querySelector('[data-apply-model]').disabled, false);
+    f.document.querySelector('[data-apply-model]').click();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.match(f.document.querySelector('[data-current-model]').textContent, /new-model/);
+    assert.match(f.document.querySelector('[data-status]').textContent, /API 和预设已保留/);
+    assert.equal(f.document.querySelector('[data-apply-model]').disabled, true);
+});
+
 test('failed preset load restores binding and releases busy state', async () => {
     const f = await fixture({ failPreset: true });
     await assert.rejects(f.switchPreset('New preset'), /preset loader failed/);
@@ -200,6 +252,7 @@ test('generation and simultaneous operations cannot change connection or preset'
     const f = await fixture();
     f.state.generating = true;
     await assert.rejects(f.switchApi('profile:p1'), /停止生成/);
+    await assert.rejects(f.switchModel('new-model'), /停止生成/);
     f.state.generating = false;
     let release;
     f.state.pause = new Promise(resolve => { release = resolve; });

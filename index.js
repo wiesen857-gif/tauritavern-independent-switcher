@@ -22,6 +22,18 @@ export function getConnections() {
     ];
 }
 
+function getCurrentModel() {
+    return String(SlashCommandParser.commands.model?.callback({ quiet: 'true' }, '') ?? '');
+}
+
+function getModels() {
+    const entries = SlashCommandParser.commands.model?.unnamedArgumentList?.[0]?.enumProvider?.() ?? [];
+    return entries.filter(entry => entry.value).map(entry => ({
+        key: String(entry.value),
+        label: entry.description ? `${entry.description} · ${entry.value}` : String(entry.value),
+    }));
+}
+
 async function command(name, value = '', args = {}) {
     const handler = SlashCommandParser.commands[name]?.callback;
     if (!handler) throw new Error(`缺少酒馆命令 /${name}，请确认使用 TauriTavern 2.4.0。`);
@@ -168,6 +180,18 @@ export async function switchPreset(name) {
     });
 }
 
+export async function switchModel(model) {
+    return runSwitch(async () => {
+        if (!getModels().some(entry => entry.key === model)) {
+            throw new Error('模型已不在当前 API 的列表中，请刷新后重新选择。');
+        }
+        if (await command('model', model) !== model || getCurrentModel() !== model) {
+            throw new Error('模型未成功应用，请检查原 API 面板。');
+        }
+        return model;
+    });
+}
+
 function fillSelect(select, entries, preferred) {
     select.replaceChildren(new Option('请选择…', ''));
     for (const entry of entries) {
@@ -189,10 +213,16 @@ function refresh() {
     });
     fillSelect(apiSelect, entries, apiSelect.value);
     fillSelect(root.querySelector('[data-preset]'), (presets?.getAllPresets() ?? []).map(name => ({ key: name, label: name })), presets?.getSelectedPresetName());
+    const currentModel = getCurrentModel();
+    const models = getModels();
+    fillSelect(root.querySelector('[data-model]'), models, currentModel);
     root.querySelector('[data-current]').textContent = `当前预设：${presets?.getSelectedPresetName() || '无'} · API：${main_api === 'openai' ? oai_settings.chat_completion_source : main_api}`;
+    root.querySelector('[data-current-model]').textContent = `当前模型：${currentModel || '未选择'}`;
     root.querySelector('[data-empty]').textContent = entries.length ? '' : '没有已保存的连接配置。请先在原 API 面板保存连接配置，再点刷新。';
+    root.querySelector('[data-model-empty]').textContent = models.length ? '' : '当前 API 尚无可选模型。请先在原 API 面板加载模型，再点刷新。';
     root.querySelector('[data-apply-api]').disabled = !apiSelect.value;
     root.querySelector('[data-apply-preset]').disabled = !root.querySelector('[data-preset]').value;
+    root.querySelector('[data-apply-model]').disabled = !root.querySelector('[data-model]').value || root.querySelector('[data-model]').value === currentModel;
 }
 
 export function init() {
@@ -203,9 +233,10 @@ export function init() {
     root.id = ROOT_ID;
     root.innerHTML = `
       <details open>
-        <summary><b>API / 预设独立切换</b></summary>
-        <p class="ttis-note">分别应用连接和预设，已有配置无需重新录入。</p>
+        <summary><b>API / 预设 / 模型独立切换</b></summary>
+        <p class="ttis-note">分别应用连接、预设和模型，已有配置无需重新录入。</p>
         <p data-current class="ttis-current"></p>
+        <p data-current-model class="ttis-current"></p>
         <fieldset>
           <label for="ttis-api">已有 API 配置</label>
           <select id="ttis-api" data-api class="text_pole"></select>
@@ -215,6 +246,11 @@ export function init() {
           <select id="ttis-preset" data-preset class="text_pole"></select>
           <button type="button" data-apply-preset class="menu_button">仅切换预设</button>
           <p class="ttis-note">应用提示词和采样参数，保留当前连接。预设绑定的正则、脚本等仍按酒馆原行为加载。</p>
+          <label for="ttis-model">当前 API 的模型</label>
+          <select id="ttis-model" data-model class="text_pole"></select>
+          <button type="button" data-apply-model class="menu_button">仅切换模型</button>
+          <p data-model-empty class="ttis-note"></p>
+          <p class="ttis-note">模型列表来自原 API 面板；切换模型不会重新应用连接配置或预设。</p>
           <button type="button" data-refresh class="menu_button">刷新配置列表</button>
         </fieldset>
         <p data-empty class="ttis-note"></p>
@@ -229,15 +265,18 @@ export function init() {
     root.querySelector('[data-preset]').addEventListener('change', () => {
         root.querySelector('[data-apply-preset]').disabled = !root.querySelector('[data-preset]').value;
     });
+    root.querySelector('[data-model]').addEventListener('change', () => {
+        root.querySelector('[data-apply-model]').disabled = !root.querySelector('[data-model]').value || root.querySelector('[data-model]').value === getCurrentModel();
+    });
     const apply = async (kind) => {
         const status = root.querySelector('[data-status]');
         const fieldset = root.querySelector('fieldset');
         fieldset.disabled = true;
         status.textContent = '正在应用…';
         try {
-            const value = root.querySelector(kind === 'api' ? '[data-api]' : '[data-preset]').value;
-            const label = await (kind === 'api' ? switchApi(value) : switchPreset(value));
-            status.textContent = kind === 'api' ? `已应用 ${label}，预设已保留；连接结果请查看原 API 面板。` : `已应用预设 ${label}，连接已保留。`;
+            const value = root.querySelector(`[data-${kind}]`).value;
+            const label = await (kind === 'api' ? switchApi(value) : kind === 'preset' ? switchPreset(value) : switchModel(value));
+            status.textContent = kind === 'api' ? `已应用 ${label}，预设已保留；连接结果请查看原 API 面板。` : kind === 'preset' ? `已应用预设 ${label}，连接已保留。` : `已切换到模型 ${label}，API 和预设已保留。`;
         } catch (error) {
             status.textContent = error.message || '切换失败，请检查原 API 面板。';
         } finally {
@@ -247,8 +286,9 @@ export function init() {
     };
     root.querySelector('[data-apply-api]').addEventListener('click', () => apply('api'));
     root.querySelector('[data-apply-preset]').addEventListener('click', () => apply('preset'));
+    root.querySelector('[data-apply-model]').addEventListener('click', () => apply('model'));
     root.querySelector('details').addEventListener('toggle', refresh);
-    for (const event of ['CONNECTION_PROFILE_CREATED', 'CONNECTION_PROFILE_UPDATED', 'CONNECTION_PROFILE_DELETED', 'MODEL_TARGET_CREATED', 'MODEL_TARGET_UPDATED', 'MODEL_TARGET_DELETED', 'PRESET_CHANGED', 'MAIN_API_CHANGED']) {
+    for (const event of ['CONNECTION_PROFILE_CREATED', 'CONNECTION_PROFILE_UPDATED', 'CONNECTION_PROFILE_DELETED', 'MODEL_TARGET_CREATED', 'MODEL_TARGET_UPDATED', 'MODEL_TARGET_DELETED', 'PRESET_CHANGED', 'MAIN_API_CHANGED', 'CHATCOMPLETION_MODEL_CHANGED']) {
         if (event_types[event]) eventSource.on(event_types[event], refresh);
     }
     refresh();
