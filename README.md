@@ -9,7 +9,7 @@
 3. 分支或标签留空，选择「安装」或「仅为我安装」。
 4. 安装完成后回到扩展设置，找到「API / 预设独立切换」。如果没有显示，重启 TauriTavern 并检查扩展管理中是否已启用。
 
-扩展更新可在原扩展管理界面完成。若此前安装过离线 ZIP 版，请先在扩展管理中删除旧的同名扩展，再按上述步骤从 GitHub 安装，避免目录冲突。删除扩展不会删除酒馆原有的 API 配置、预设或聊天记录。
+扩展更新可在原扩展管理界面完成。若遇到 `getPresetApplicationPromise` 导出缺失的加载错误，请更新到 **1.0.1** 并重启 TauriTavern。若此前安装过离线 ZIP 版，请先在扩展管理中删除旧的同名扩展，再按上述步骤从 GitHub 安装，避免目录冲突。删除扩展不会删除酒馆原有的 API 配置、预设或聊天记录。
 
 仓库根目录有 `manifest.json`，供 TauriTavern 直接按 Git 地址安装；无需下载 ZIP，也无需访问安卓受限的应用数据目录。
 
@@ -36,7 +36,7 @@
 目标版本：`Darkatse/TauriTavern` 标签 `v2.4.0`，提交 `fff9af0333be97697be2313981699ab0ce35c236`。
 
 - [原连接管理器](https://github.com/Darkatse/TauriTavern/blob/fff9af0333be97697be2313981699ab0ce35c236/src/scripts/extensions/connection-manager/index.js)：`extension_settings.connectionManager.profiles/modelTargets`、连接字段顺序、命令回调、模型配置语义。
-- [聊天补全预设加载器](https://github.com/Darkatse/TauriTavern/blob/fff9af0333be97697be2313981699ab0ce35c236/src/scripts/openai.js)：`bind_preset_to_connection`、`settingsToUpdate`、`getPresetApplicationPromise()`。独立切换时暂时关闭绑定，等待原生加载结束后恢复原值。
+- [聊天补全预设加载器](https://github.com/Darkatse/TauriTavern/blob/fff9af0333be97697be2313981699ab0ce35c236/src/scripts/openai.js)：`bind_preset_to_connection`、`settingsToUpdate`。部分安卓构建没有导出 `getPresetApplicationPromise()`，扩展可在缺少该导出时加载；独立切换预设时暂时关闭绑定，通过原生 `PRESET_CHANGED` 事件等待加载结束后恢复原值。
 - [预设管理器](https://github.com/Darkatse/TauriTavern/blob/fff9af0333be97697be2313981699ab0ce35c236/src/scripts/preset-manager.js)：`getPresetManager()`、`getAllPresets()`、`findPreset()`、`selectPreset()`。
 - [数据包导入](https://github.com/Darkatse/TauriTavern/tree/fff9af0333be97697be2313981699ab0ce35c236/src-tauri/crates/tt-adapter-archive/src/data_archive/import)：扩展目录识别、规范化和按文件合并规则。
 

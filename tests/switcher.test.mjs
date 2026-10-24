@@ -35,6 +35,7 @@ async function fixture(options = {}) {
     const events = {};
     const eventSource = {
         on: (event, fn) => { (events[event] ??= []).push(fn); },
+        removeListener: (event, fn) => { events[event] = (events[event] ?? []).filter(listener => listener !== fn); },
         emit: async (event, ...args) => { for (const fn of events[event] ?? []) await fn(...args); },
     };
     const $ = (selector) => {
@@ -67,13 +68,18 @@ async function fixture(options = {}) {
         getSelectedPresetName: () => state.selectedPreset,
         selectPreset: async value => {
             if (options.failPreset) throw new Error('preset loader failed');
-            await Promise.resolve();
-            if (settings.bind_preset_to_connection) {
-                settings.custom_url = 'https://wrong.example';
-                settings.custom_model = 'wrong-model';
-            }
-            settings.temp_openai = 0.9;
-            state.selectedPreset = ['Original', 'New preset'][value];
+            const apply = async () => {
+                await Promise.resolve();
+                if (settings.bind_preset_to_connection) {
+                    settings.custom_url = 'https://wrong.example';
+                    settings.custom_model = 'wrong-model';
+                }
+                settings.temp_openai = 0.9;
+                state.selectedPreset = ['Original', 'New preset'][value];
+                await eventSource.emit('preset', { apiId: 'openai', name: state.selectedPreset });
+            };
+            if (options.delayedPreset) { setImmediate(() => void apply()); return; }
+            await apply();
         },
     };
     // Happy DOM does not expose the browser's Option convenience constructor.
@@ -83,13 +89,14 @@ async function fixture(options = {}) {
         option.value = value;
         return option;
     }
-    const context = vm.createContext({ document, Option, structuredClone, $, console });
+    const context = vm.createContext({ document, Option, structuredClone, $, console, setTimeout, clearTimeout });
     const modules = {
         '/script.js': { eventSource, event_types: { PRESET_CHANGED: 'preset' }, main_api: options.mainApi ?? 'openai',
             isGenerating: () => state.generating, saveSettingsDebounced: () => state.saves++,
             withConnectionValidationSuspended: async (_, fn) => { state.suspended = true; try { return await fn(); } finally { state.suspended = false; } } },
         '/scripts/extensions.js': { extension_settings: extensionSettings },
-        '/scripts/openai.js': { oai_settings: settings, settingsToUpdate: mapping, getPresetApplicationPromise: () => pendingPreset },
+        '/scripts/openai.js': { oai_settings: settings, ...(!options.missingMapping && { settingsToUpdate: mapping }),
+            ...(!options.missingPresetPromise && { getPresetApplicationPromise: () => pendingPreset }) },
         '/scripts/preset-manager.js': { getPresetManager: () => manager },
         '/scripts/slash-commands.js': { CONNECT_API_MAP: { custom: { selected: 'openai' }, kobold: { selected: 'kobold' } }, connectCurrentApi: () => { assert.equal(state.suspended, false); state.connects++; } },
         '/scripts/slash-commands/SlashCommandParser.js': { SlashCommandParser: { commands } },
@@ -121,6 +128,30 @@ test('API switch preserves preset, unsaved prompts, sampling and saved profiles;
     assert.ok(f.state.calls.every(call => call.suspended));
     assert.ok(f.state.calls.every(call => !['preset', 'regex-preset', 'start-reply-with'].includes(call.name)));
     assert.equal(f.state.connects, 1);
+});
+
+test('loads when Android openai.js omits getPresetApplicationPromise', async () => {
+    const f = await fixture({ missingPresetPromise: true });
+    f.init();
+    assert.ok(f.document.getElementById('tt-independent-switcher'));
+    await f.switchPreset('New preset');
+    assert.equal(f.settings.custom_url, 'https://old.example/v1');
+});
+
+test('keeps connection unbound until an asynchronous native preset finishes', async () => {
+    const f = await fixture({ missingPresetPromise: true, delayedPreset: true });
+    await f.switchPreset('New preset');
+    assert.equal(f.settings.custom_url, 'https://old.example/v1');
+    assert.equal(f.settings.bind_preset_to_connection, true);
+});
+
+test('missing prompt mapping blocks API changes before touching the connection', async () => {
+    const f = await fixture({ missingPresetPromise: true, missingMapping: true });
+    f.init();
+    await assert.rejects(f.switchApi('profile:p1'), /缺少预设字段映射/);
+    assert.equal(f.state.calls.length, 0);
+    await f.switchPreset('New preset');
+    assert.equal(f.settings.custom_url, 'https://old.example/v1');
 });
 
 test('preset switch preserves connection and restores both original binding states', async () => {

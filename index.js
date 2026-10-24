@@ -1,12 +1,13 @@
 import { eventSource, event_types, main_api, isGenerating, saveSettingsDebounced, withConnectionValidationSuspended } from '/script.js';
 import { extension_settings } from '/scripts/extensions.js';
-import { oai_settings, settingsToUpdate, getPresetApplicationPromise } from '/scripts/openai.js';
+import * as openai from '/scripts/openai.js';
 import { getPresetManager } from '/scripts/preset-manager.js';
 import { CONNECT_API_MAP, connectCurrentApi } from '/scripts/slash-commands.js';
 import { SlashCommandParser } from '/scripts/slash-commands/SlashCommandParser.js';
 import { resolveSecretKey, secret_state, SECRET_KEYS } from '/scripts/secrets.js';
 
 const ROOT_ID = 'tt-independent-switcher';
+const oai_settings = openai.oai_settings;
 let busy = false;
 
 function family(api) {
@@ -40,7 +41,7 @@ async function runSwitch(action) {
     if (isGenerating()) throw new Error('请先停止生成，再切换 API 或预设。');
     busy = true;
     try {
-        await getPresetApplicationPromise();
+        if (openai.getPresetApplicationPromise) await openai.getPresetApplicationPromise();
         return await withConnectionValidationSuspended('Independent API/preset switch', action);
     } finally {
         busy = false;
@@ -76,8 +77,11 @@ export async function switchApi(key) {
         }
 
         // Native model/source handlers can clamp sampling values. Keep unsaved prompt settings too.
+        if (main_api === 'openai' && !openai.settingsToUpdate) {
+            throw new Error('此版本缺少预设字段映射，无法安全保留采样和提示词设置。');
+        }
         const promptValues = main_api === 'openai'
-            ? Object.entries(settingsToUpdate).filter(([, spec]) => !spec[3])
+            ? Object.entries(openai.settingsToUpdate).filter(([, spec]) => !spec[3])
                 .map(([, spec]) => [spec, structuredClone(oai_settings[spec[1]])])
             : [];
         try {
@@ -134,13 +138,30 @@ export async function switchPreset(name) {
     return runSwitch(async () => {
         const manager = getPresetManager();
         if (!manager || !manager.getAllPresets().includes(name)) throw new Error('预设已不存在，请刷新列表。');
+        if (!event_types.PRESET_CHANGED) throw new Error('此版本缺少预设完成事件，无法安全切换。');
         const previousBinding = oai_settings.bind_preset_to_connection;
+        let finish;
+        let timer;
+        const applied = new Promise(resolve => {
+            const listener = ({ apiId, name: appliedName } = {}) => {
+                if (family(apiId) === family(main_api) && appliedName === name) resolve();
+            };
+            eventSource.on(event_types.PRESET_CHANGED, listener);
+            finish = () => {
+                clearTimeout(timer);
+                eventSource.removeListener(event_types.PRESET_CHANGED, listener);
+            };
+        });
         try {
             // v2.4.0's preset loader skips every is_connection field when this flag is false.
             oai_settings.bind_preset_to_connection = false;
             await manager.selectPreset(manager.findPreset(name));
+            await Promise.race([applied, new Promise((_, reject) => {
+                timer = setTimeout(() => reject(new Error('等待预设加载超时，请检查原预设面板。')), 15000);
+            })]);
             if (manager.getSelectedPresetName() !== name) throw new Error('预设未成功应用，请刷新后重试。');
         } finally {
+            finish();
             oai_settings.bind_preset_to_connection = previousBinding;
         }
         return name;
